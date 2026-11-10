@@ -38,6 +38,14 @@ final class Settings {
     var motion: Int { get { d.integer(forKey: "motion") } set { d.set(newValue, forKey: "motion") } }
     var fade: Int { get { d.integer(forKey: "fade") } set { d.set(newValue, forKey: "fade") } }
     var clicks: Bool { get { d.bool(forKey: "clicks") } set { d.set(newValue, forKey: "clicks") } }
+    var drawKey: HotKey {
+        get { HotKey(d.dictionary(forKey: "drawKey")) ?? HotKey(code: kVK_ANSI_D, mods: [.control, .option], name: "D") }
+        set { d.set(newValue.dict, forKey: "drawKey") }
+    }
+    var clearKey: HotKey {
+        get { HotKey(d.dictionary(forKey: "clearKey")) ?? HotKey(code: kVK_ANSI_X, mods: [.control, .option], name: "X") }
+        set { d.set(newValue.dict, forKey: "clearKey") }
+    }
 
     var style: Style {
         Style(colors: palettes[palette].colors, width: thicknesses[thickness].1, glow: glow, period: motions[motion].1)
@@ -390,11 +398,14 @@ final class Toolbar: NSView {
             guard let self else { return }
             self.app.settings.fade = (st.fade + 1) % fades.count; self.app.settingsChanged()
         })
+        stack.addArrangedSubview(TBButton(symbol: "cursorarrow.click.2", tip: "Show clicks: \(st.clicks ? "On" : "Off")", selected: st.clicks) { [weak self] in
+            self?.app.settings.clicks.toggle(); self?.app.settingsChanged()
+        })
         stack.addArrangedSubview(divider())
 
         stack.addArrangedSubview(TBButton(symbol: "arrow.uturn.backward", tip: "Undo  (⌫)") { [weak self] in self?.app.undo() })
         stack.addArrangedSubview(TBButton(symbol: "trash", tip: "Clear  (C)") { [weak self] in self?.app.clearAll() })
-        stack.addArrangedSubview(TBButton(symbol: "xmark", tip: "Done  (Esc clears · ⌃⌥D keeps drawings)") { [weak self] in self?.app.setDrawing(false) })
+        stack.addArrangedSubview(TBButton(symbol: "xmark", tip: "Done  (Esc clears)") { [weak self] in self?.app.setDrawing(false) })
 
         let size = stack.fittingSize
         let origin = frame.origin
@@ -661,9 +672,59 @@ final class Overlay: NSWindow {
     override var canBecomeKey: Bool { true }
 }
 
-// MARK: - Global hotkeys
+// MARK: - Hotkeys
+
+struct HotKey {
+    var code: Int
+    var mods: NSEvent.ModifierFlags
+    var name: String
+
+    static let relevant: NSEvent.ModifierFlags = [.control, .option, .shift, .command]
+
+    var carbonMods: UInt32 {
+        var m = 0
+        if mods.contains(.control) { m |= controlKey }
+        if mods.contains(.option) { m |= optionKey }
+        if mods.contains(.shift) { m |= shiftKey }
+        if mods.contains(.command) { m |= cmdKey }
+        return UInt32(m)
+    }
+
+    var display: String {
+        var s = ""
+        if mods.contains(.control) { s += "⌃" }
+        if mods.contains(.option) { s += "⌥" }
+        if mods.contains(.shift) { s += "⇧" }
+        if mods.contains(.command) { s += "⌘" }
+        return s + name
+    }
+
+    var dict: [String: Any] { ["code": code, "mods": mods.rawValue, "name": name] }
+
+    init(code: Int, mods: NSEvent.ModifierFlags, name: String) {
+        self.code = code
+        self.mods = mods.intersection(HotKey.relevant)
+        self.name = name
+    }
+
+    init?(_ d: Any?) {
+        guard let d = d as? [String: Any], let code = d["code"] as? Int, let mods = d["mods"] as? UInt, let name = d["name"] as? String else { return nil }
+        self.init(code: code, mods: NSEvent.ModifierFlags(rawValue: mods), name: name)
+    }
+
+    init?(event e: NSEvent) {
+        let mods = e.modifierFlags.intersection(HotKey.relevant)
+        guard !mods.isEmpty else { return nil }
+        let special: [Int: String] = [kVK_Space: "Space", kVK_Return: "↩", kVK_Tab: "⇥", kVK_LeftArrow: "←", kVK_RightArrow: "→", kVK_UpArrow: "↑", kVK_DownArrow: "↓",
+                                      kVK_F1: "F1", kVK_F2: "F2", kVK_F3: "F3", kVK_F4: "F4", kVK_F5: "F5", kVK_F6: "F6", kVK_F7: "F7", kVK_F8: "F8", kVK_F9: "F9", kVK_F10: "F10", kVK_F11: "F11", kVK_F12: "F12"]
+        let code = Int(e.keyCode)
+        let name = special[code] ?? (e.charactersIgnoringModifiers ?? "?").uppercased()
+        self.init(code: code, mods: mods, name: name)
+    }
+}
 
 var hotKeyActions: [UInt32: () -> Void] = [:]
+var hotKeyRefs: [UInt32: EventHotKeyRef] = [:]
 
 func installHotKeys() {
     var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
@@ -675,35 +736,343 @@ func installHotKeys() {
     }, 1, &spec, nil, nil)
 }
 
-func registerHotKey(_ id: UInt32, key: Int, _ action: @escaping () -> Void) {
+@discardableResult
+func registerHotKey(_ id: UInt32, _ hk: HotKey, _ action: @escaping () -> Void) -> Bool {
+    unregisterHotKey(id)
     var ref: EventHotKeyRef?
-    RegisterEventHotKey(UInt32(key), UInt32(controlKey | optionKey), EventHotKeyID(signature: OSType(0x48414C4F), id: id), GetApplicationEventTarget(), 0, &ref)
+    let status = RegisterEventHotKey(UInt32(hk.code), hk.carbonMods, EventHotKeyID(signature: OSType(0x48414C4F), id: id), GetApplicationEventTarget(), 0, &ref)
     hotKeyActions[id] = action
+    if status == noErr, let ref { hotKeyRefs[id] = ref; return true }
+    return false
+}
+
+func unregisterHotKey(_ id: UInt32) {
+    if let ref = hotKeyRefs.removeValue(forKey: id) { UnregisterEventHotKey(ref) }
+}
+
+// MARK: - Toolbox (menu-bar panel)
+
+final class HotKeyField: NSView {
+    var hotKey: HotKey { didSet { needsDisplay = true } }
+    var onChange: (HotKey) -> Void = { _ in }
+    var onRecording: (Bool) -> Void = { _ in }
+    private var recording = false { didSet { needsDisplay = true; onRecording(recording) } }
+    private var monitor: Any?
+
+    init(_ hk: HotKey) {
+        hotKey = hk
+        super.init(frame: NSRect(x: 0, y: 0, width: 120, height: 28))
+        translatesAutoresizingMaskIntoConstraints = false
+        widthAnchor.constraint(equalToConstant: 120).isActive = true
+        heightAnchor.constraint(equalToConstant: 28).isActive = true
+        toolTip = "Click, then press a shortcut with ⌃, ⌥, ⇧ or ⌘"
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func mouseDown(with e: NSEvent) { recording ? stop() : start() }
+    override func resetCursorRects() { addCursorRect(bounds, cursor: .pointingHand) }
+
+    private func start() {
+        recording = true
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
+            guard let self else { return e }
+            if Int(e.keyCode) == kVK_Escape { self.stop(); return nil }
+            if let hk = HotKey(event: e) { self.hotKey = hk; self.stop(); self.onChange(hk) } else { NSSound.beep() }
+            return nil
+        }
+    }
+
+    func stop() {
+        if let m = monitor { NSEvent.removeMonitor(m); monitor = nil }
+        if recording { recording = false }
+    }
+
+    override func viewDidMoveToWindow() { if window == nil { stop() } }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let r = bounds.insetBy(dx: 0.5, dy: 0.5)
+        let bg = NSBezierPath(roundedRect: r, xRadius: 8, yRadius: 8)
+        NSColor(white: 1, alpha: recording ? 0.14 : 0.07).setFill()
+        bg.fill()
+        (recording ? NSColor.controlAccentColor : NSColor(white: 1, alpha: 0.12)).setStroke()
+        bg.lineWidth = recording ? 1.5 : 1
+        bg.stroke()
+        let text = recording ? "Press keys…" : hotKey.display
+        let s = NSAttributedString(string: text, attributes: [
+            .font: recording ? NSFont.systemFont(ofSize: 12, weight: .medium) : NSFont.monospacedSystemFont(ofSize: 13, weight: .medium),
+            .foregroundColor: NSColor(white: 1, alpha: recording ? 0.6 : 0.95),
+        ])
+        s.draw(at: NSPoint(x: bounds.midX - s.size().width / 2, y: bounds.midY - s.size().height / 2))
+    }
+}
+
+final class Toolbox: NSView {
+    unowned let app: AppDelegate
+    private let stack = NSStackView()
+    private var glowSwitch: NSSwitch?, clicksSwitch: NSSwitch?
+    private var fields: [HotKeyField] = []
+
+    init(app: AppDelegate) {
+        self.app = app
+        super.init(frame: NSRect(x: 0, y: 0, width: 316, height: 100))
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 10
+        stack.edgeInsets = NSEdgeInsets(top: 14, left: 14, bottom: 12, right: 14)
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor), stack.trailingAnchor.constraint(equalTo: trailingAnchor),
+            stack.topAnchor.constraint(equalTo: topAnchor), stack.bottomAnchor.constraint(equalTo: bottomAnchor),
+            widthAnchor.constraint(equalToConstant: 316),
+        ])
+        rebuild()
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    func stopRecording() { fields.forEach { $0.stop() } }
+
+    func rebuild() {
+        stopRecording()
+        fields = []
+        stack.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        let st = app.settings
+
+        // Header
+        let title = NSTextField(labelWithString: "Halo")
+        title.font = .systemFont(ofSize: 13, weight: .semibold)
+        let drawing = app.drawing
+        let start = TBButton(width: 150, tip: "Start drawing", paint: { r, on in
+            NSColor(white: 1, alpha: on ? 0.2 : 0.12).setFill()
+            NSBezierPath(roundedRect: r, xRadius: 9, yRadius: 9).fill()
+            let s = NSMutableAttributedString(string: drawing ? "Stop drawing  " : "Start drawing  ", attributes: [.font: NSFont.systemFont(ofSize: 12, weight: .semibold), .foregroundColor: NSColor.white])
+            s.append(NSAttributedString(string: st.drawKey.display, attributes: [.font: NSFont.monospacedSystemFont(ofSize: 11, weight: .medium), .foregroundColor: NSColor(white: 1, alpha: 0.5)]))
+            s.draw(at: NSPoint(x: r.midX - s.size().width / 2, y: r.midY - s.size().height / 2))
+        }) { [weak self] in self?.app.closeToolbox(); self?.app.toggleDrawing() }
+        start.translatesAutoresizingMaskIntoConstraints = false
+        start.widthAnchor.constraint(equalToConstant: 150).isActive = true
+        start.heightAnchor.constraint(equalToConstant: 32).isActive = true
+        let spacer = NSView()
+        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        let header = NSStackView(views: [title, spacer, start])
+        header.translatesAutoresizingMaskIntoConstraints = false
+        header.widthAnchor.constraint(equalToConstant: 288).isActive = true
+        stack.addArrangedSubview(header)
+        stack.addArrangedSubview(rule())
+
+        // Style
+        stack.addArrangedSubview(row("Colour", palettes.enumerated().map { i, pal in
+            TBButton(width: 28, tip: pal.name, paint: { r, _ in Toolbar.swatch(pal, in: r, selected: i == st.palette) }) { [weak self] in self?.set { $0.palette = i } }
+        }))
+        stack.addArrangedSubview(row("Thickness", thicknesses.enumerated().map { i, t in
+            let b = TBButton(width: 34, tip: t.0, paint: { r, on in
+                let p = NSBezierPath()
+                p.move(to: NSPoint(x: r.midX - 8, y: r.midY))
+                p.line(to: NSPoint(x: r.midX + 8, y: r.midY))
+                p.lineWidth = t.1 * 0.8
+                p.lineCapStyle = .round
+                NSColor(white: 1, alpha: on ? 1 : 0.62).setStroke()
+                p.stroke()
+            }) { [weak self] in self?.set { $0.thickness = i } }
+            b.selected = i == st.thickness
+            return b
+        }))
+        stack.addArrangedSubview(row("Motion", motions.enumerated().map { i, m in text(m.0, selected: i == st.motion) { $0.motion = i } }))
+        stack.addArrangedSubview(row("Auto-fade", fades.enumerated().map { i, f in
+            text(f.1 > 0 ? "\(Int(f.1))s" : "Never", selected: i == st.fade) { $0.fade = i }
+        }))
+        let glow = NSSwitch()
+        glow.controlSize = .small
+        glow.state = st.glow ? .on : .off
+        glow.target = self
+        glow.action = #selector(toggleGlow)
+        stack.addArrangedSubview(row("Glow", [glow]))
+        let clicks = NSSwitch()
+        clicks.controlSize = .small
+        clicks.state = st.clicks ? .on : .off
+        clicks.target = self
+        clicks.action = #selector(toggleClicks)
+        stack.addArrangedSubview(row("Show clicks", [clicks]))
+        stack.addArrangedSubview(rule())
+
+        // Shortcuts
+        let drawField = HotKeyField(st.drawKey)
+        drawField.onChange = { [weak self] hk in self?.app.setHotKey(draw: hk) }
+        drawField.onRecording = { [weak self] r in self?.app.suspendHotKeys(r) }
+        let clearField = HotKeyField(st.clearKey)
+        clearField.onChange = { [weak self] hk in self?.app.setHotKey(clear: hk) }
+        clearField.onRecording = { [weak self] r in self?.app.suspendHotKeys(r) }
+        fields = [drawField, clearField]
+        stack.addArrangedSubview(row("Draw", [drawField]))
+        stack.addArrangedSubview(row("Clear", [clearField]))
+        stack.addArrangedSubview(note("Tap to toggle with toolbar · hold to draw, release to clear"))
+        if let warning = app.hotKeyWarning {
+            let w = note(warning)
+            w.textColor = .systemOrange
+            stack.addArrangedSubview(w)
+        }
+        stack.addArrangedSubview(rule())
+
+        let quit = TBButton(width: 288, tip: "Quit Halo", paint: { r, on in
+            let s = NSAttributedString(string: "Quit Halo", attributes: [.font: NSFont.systemFont(ofSize: 12, weight: .regular), .foregroundColor: NSColor(white: 1, alpha: on ? 0.9 : 0.5)])
+            s.draw(at: NSPoint(x: r.minX + 6, y: r.midY - s.size().height / 2))
+        }) { NSApp.terminate(nil) }
+        quit.translatesAutoresizingMaskIntoConstraints = false
+        quit.widthAnchor.constraint(equalToConstant: 288).isActive = true
+        quit.heightAnchor.constraint(equalToConstant: 26).isActive = true
+        stack.addArrangedSubview(quit)
+    }
+
+    private func set(_ change: (Settings) -> Void) {
+        change(app.settings)
+        app.settingsChanged()
+    }
+
+    @objc private func toggleGlow(_ s: NSSwitch) { set { $0.glow = s.state == .on } }
+    @objc private func toggleClicks(_ s: NSSwitch) { set { $0.clicks = s.state == .on } }
+
+    private func text(_ label: String, selected: Bool, _ change: @escaping (Settings) -> Void) -> TBButton {
+        let w = max(44, NSAttributedString(string: label, attributes: [.font: NSFont.systemFont(ofSize: 12, weight: .medium)]).size().width + 20)
+        let b = TBButton(width: w, tip: label, paint: { r, on in
+            let s = NSAttributedString(string: label, attributes: [.font: NSFont.systemFont(ofSize: 12, weight: .medium), .foregroundColor: NSColor(white: 1, alpha: on ? 1 : 0.6)])
+            s.draw(at: NSPoint(x: r.midX - s.size().width / 2, y: r.midY - s.size().height / 2))
+        }) { [weak self] in self?.set(change) }
+        b.selected = selected
+        b.translatesAutoresizingMaskIntoConstraints = false
+        b.widthAnchor.constraint(equalToConstant: w).isActive = true
+        b.heightAnchor.constraint(equalToConstant: 28).isActive = true
+        return b
+    }
+
+    private func row(_ label: String, _ controls: [NSView]) -> NSView {
+        let l = NSTextField(labelWithString: label)
+        l.font = .systemFont(ofSize: 12)
+        l.textColor = NSColor(white: 1, alpha: 0.55)
+        l.translatesAutoresizingMaskIntoConstraints = false
+        l.widthAnchor.constraint(equalToConstant: 84).isActive = true
+        for c in controls where c is TBButton && c.constraints.isEmpty {
+            c.translatesAutoresizingMaskIntoConstraints = false
+            c.widthAnchor.constraint(equalToConstant: c.frame.width).isActive = true
+            c.heightAnchor.constraint(equalToConstant: 28).isActive = true
+        }
+        let controlsStack = NSStackView(views: controls)
+        controlsStack.spacing = 2
+        let r = NSStackView(views: [l, controlsStack])
+        r.spacing = 6
+        return r
+    }
+
+    private func note(_ s: String) -> NSTextField {
+        let t = NSTextField(wrappingLabelWithString: s)
+        t.font = .systemFont(ofSize: 11)
+        t.textColor = NSColor(white: 1, alpha: 0.4)
+        t.preferredMaxLayoutWidth = 288
+        return t
+    }
+
+    private func rule() -> NSView {
+        let b = NSBox()
+        b.boxType = .custom
+        b.borderWidth = 0
+        b.fillColor = NSColor(white: 1, alpha: 0.08)
+        b.translatesAutoresizingMaskIntoConstraints = false
+        b.widthAnchor.constraint(equalToConstant: 288).isActive = true
+        b.heightAnchor.constraint(equalToConstant: 1).isActive = true
+        return b
+    }
 }
 
 // MARK: - App
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     let settings = Settings()
     var tool: Tool = .box
     private var overlays: [Overlay] = []
     private var statusItem: NSStatusItem!
-    private var drawing = false
+    private(set) var drawing = false
     private var previousApp: NSRunningApplication?
     private var clickMonitor: Any?
+    private let popover = NSPopover()
+    private var toolbox: Toolbox?
+    private(set) var hotKeyWarning: String?
 
     func applicationDidFinishLaunching(_ n: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        rebuildMenu()
+        statusItem.button?.target = self
+        statusItem.button?.action = #selector(statusClicked)
+        popover.behavior = .transient
+        popover.appearance = NSAppearance(named: .darkAqua)
+        popover.delegate = self
+
         buildOverlays()
         NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in self?.buildOverlays() }
 
         installHotKeys()
-        registerHotKey(1, key: kVK_ANSI_D) { [weak self] in self?.hotKeyPressed() }
-        registerHotKey(2, key: kVK_ANSI_X) { [weak self] in self?.clearAll() }
+        registerHotKeys()
         updateClickMonitor()
+        refreshUI()
 
         if ProcessInfo.processInfo.environment["HALO_DEMO"] != nil { demo() }
+        if let out = ProcessInfo.processInfo.environment["HALO_TOOLBOX"] {
+            let tb = Toolbox(app: self)
+            tb.appearance = NSAppearance(named: .darkAqua)
+            tb.layoutSubtreeIfNeeded()
+            tb.setFrameSize(tb.fittingSize)
+            tb.layoutSubtreeIfNeeded()
+            let rep = tb.bitmapImageRepForCachingDisplay(in: tb.bounds)!
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+            NSColor(white: 0.16, alpha: 1).setFill()
+            tb.bounds.fill()
+            NSGraphicsContext.restoreGraphicsState()
+            tb.cacheDisplay(in: tb.bounds, to: rep)
+            try? rep.representation(using: .png, properties: [:])!.write(to: URL(fileURLWithPath: out))
+            NSApp.terminate(nil)
+        }
+    }
+
+    private func registerHotKeys() {
+        var failed: [String] = []
+        if !registerHotKey(1, settings.drawKey, { [weak self] in self?.hotKeyPressed() }) { failed.append(settings.drawKey.display) }
+        if !registerHotKey(2, settings.clearKey, { [weak self] in self?.clearAll() }) { failed.append(settings.clearKey.display) }
+        hotKeyWarning = failed.isEmpty ? nil : "\(failed.joined(separator: ", ")) is taken by another app. Pick another."
+    }
+
+    func suspendHotKeys(_ suspend: Bool) {
+        if suspend { unregisterHotKey(1); unregisterHotKey(2) } else { registerHotKeys() }
+    }
+
+    func setHotKey(draw: HotKey? = nil, clear: HotKey? = nil) {
+        if let draw { settings.drawKey = draw }
+        if let clear { settings.clearKey = clear }
+        registerHotKeys()
+        toolbox?.rebuild()
+        fitToolbox()
+    }
+
+    @objc private func statusClicked() {
+        if popover.isShown { closeToolbox(); return }
+        let tb = Toolbox(app: self)
+        let vc = NSViewController()
+        vc.view = tb
+        toolbox = tb
+        popover.contentViewController = vc
+        fitToolbox()
+        NSApp.activate(ignoringOtherApps: true)
+        if let b = statusItem.button { popover.show(relativeTo: b.bounds, of: b, preferredEdge: .minY) }
+    }
+
+    func closeToolbox() { popover.performClose(nil) }
+
+    private func fitToolbox() {
+        guard let tb = toolbox else { return }
+        tb.layoutSubtreeIfNeeded()
+        popover.contentSize = tb.fittingSize
+    }
+
+    func popoverDidClose(_ notification: Notification) {
+        toolbox?.stopRecording()
+        toolbox = nil
     }
 
     private func buildOverlays() {
@@ -716,7 +1085,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return overlays.first { NSMouseInRect(p, $0.frame, false) } ?? overlays.first
     }
 
-    // Tap ⌃⌥D: stay in drawing mode with the toolbar. Hold ⌃⌥D: draw while held, clear on release.
+    // Tap the draw shortcut: stay in drawing mode with the toolbar.
+    // Hold it: draw while the modifiers are held, clear on release.
     private var holdTimer: Timer?
     private var pressedAt = Date()
 
@@ -730,8 +1100,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func checkHold() {
-        let flags = NSEvent.modifierFlags
-        if flags.contains(.control) && flags.contains(.option) { return }
+        if NSEvent.modifierFlags.intersection(HotKey.relevant).isSuperset(of: settings.drawKey.mods) { return }
         holdTimer?.invalidate()
         holdTimer = nil
         guard drawing else { return }
@@ -742,6 +1111,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             setDrawing(false)
         }
     }
+
+    func toggleDrawing() { setDrawing(!drawing) }
 
     func setDrawing(_ on: Bool, toolbar: Bool = true) {
         guard on != drawing else { return }
@@ -764,23 +1135,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSCursor.arrow.set()
             previousApp?.activate()
         }
-        rebuildMenu()
+        refreshUI()
     }
 
     func select(_ t: Tool) {
         tool = t
-        refreshToolbars()
+        refreshUI()
     }
 
     func undo() { overlays.first { $0.isKeyWindow }?.canvas.undo() ?? overlayUnderMouse?.canvas.undo() }
 
     func settingsChanged() {
         updateClickMonitor()
-        rebuildMenu()
+        refreshUI()
     }
 
-    private func refreshToolbars() {
+    private func refreshUI() {
+        statusItem.button?.image = NSImage(systemSymbolName: drawing ? "highlighter" : "scribble.variable", accessibilityDescription: "Halo")
         overlays.forEach { if !$0.canvas.toolbar.isHidden && $0.canvas.toolbar.superview != nil { $0.canvas.toolbar.rebuild() } }
+        toolbox?.rebuild()
+        fitToolbox()
     }
 
     func clearAll() { overlays.forEach { $0.canvas.clear() } }
@@ -801,56 +1175,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let p = NSEvent.mouseLocation
             o.canvas.ripple(at: CGPoint(x: p.x - o.frame.minX, y: p.y - o.frame.minY))
         }
-    }
-
-    // Menu
-
-    private func rebuildMenu() {
-        refreshToolbars()
-        statusItem.button?.image = NSImage(systemSymbolName: drawing ? "highlighter" : "scribble.variable", accessibilityDescription: "Halo")
-        let menu = NSMenu()
-        let draw = item(drawing ? "Stop Drawing" : "Start Drawing") { [weak self] in self.map { $0.setDrawing(!$0.drawing) } }
-        draw.keyEquivalent = "d"
-        draw.keyEquivalentModifierMask = [.control, .option]
-        menu.addItem(draw)
-        let clear = item("Clear") { [weak self] in self?.clearAll() }
-        clear.keyEquivalent = "x"
-        clear.keyEquivalentModifierMask = [.control, .option]
-        menu.addItem(clear)
-        menu.addItem(.separator())
-
-        menu.addItem(submenu("Colour", palettes.map(\.name), settings.palette) { [weak self] in self?.settings.palette = $0 })
-        menu.addItem(submenu("Thickness", thicknesses.map(\.0), settings.thickness) { [weak self] in self?.settings.thickness = $0 })
-        menu.addItem(submenu("Motion", motions.map(\.0), settings.motion) { [weak self] in self?.settings.motion = $0 })
-        menu.addItem(submenu("Auto-fade", fades.map(\.0), settings.fade) { [weak self] in self?.settings.fade = $0 })
-        let glow = item("Glow") { [weak self] in self.map { $0.settings.glow.toggle() } }
-        glow.state = settings.glow ? .on : .off
-        menu.addItem(glow)
-        let clicks = item("Show Clicks") { [weak self] in self.map { $0.settings.clicks.toggle(); $0.updateClickMonitor() } }
-        clicks.state = settings.clicks ? .on : .off
-        menu.addItem(clicks)
-        menu.addItem(.separator())
-        menu.addItem(item("Quit Halo") { NSApp.terminate(nil) })
-        statusItem.menu = menu
-    }
-
-    private func submenu(_ title: String, _ names: [String], _ selected: Int, _ pick: @escaping (Int) -> Void) -> NSMenuItem {
-        let parent = NSMenuItem(title: title, action: nil, keyEquivalent: "")
-        let sub = NSMenu()
-        for (i, name) in names.enumerated() {
-            let it = item(name) { pick(i) }
-            it.state = i == selected ? .on : .off
-            sub.addItem(it)
-        }
-        parent.submenu = sub
-        return parent
-    }
-
-    private func item(_ title: String, _ action: @escaping () -> Void) -> NSMenuItem {
-        let it = ClosureItem(title: title, action: #selector(ClosureItem.fire), keyEquivalent: "")
-        it.target = it
-        it.closure = { [weak self] in action(); self?.rebuildMenu() }
-        return it
     }
 
     // Draws sample marks for screenshots: HALO_DEMO=1
@@ -885,11 +1209,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
     }
-}
-
-final class ClosureItem: NSMenuItem {
-    var closure: (() -> Void)?
-    @objc func fire() { closure?() }
 }
 
 let app = NSApplication.shared

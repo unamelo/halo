@@ -14,9 +14,9 @@ Needs only the Swift toolchain (Xcode Command Line Tools), no Xcode project.
 
 | Key | Action |
 |---|---|
-| Hold ⌃⌥D | Draw while held; release clears everything (no toolbar) |
-| Tap ⌃⌥D | Toggle drawing mode with toolbar (stopping keeps drawings, click-through) |
-| ⌃⌥X | Clear from anywhere |
+| Hold ⌃⌥D (default) | Draw while held; release clears everything (no toolbar) |
+| Tap ⌃⌥D (default) | Toggle drawing mode with toolbar (stopping keeps drawings, click-through) |
+| ⌃⌥X (default) | Clear from anywhere |
 | Drag | Draw with current tool |
 | Click | Drop a ring marker |
 | 1 2 3 4 | Box · Spotlight · Arrow · Pen |
@@ -25,7 +25,7 @@ Needs only the Swift toolchain (Xcode Command Line Tools), no Xcode project.
 | T | Hide / show toolbar |
 | Esc | Clear and exit |
 
-The floating toolbar (drag it by the grip) and the menu-bar menu control colour, thickness, motion, glow, auto-fade and click ripples.
+Click the menu-bar icon for the toolbox: colour, thickness, motion, auto-fade, glow, click ripples, and custom shortcuts (click a shortcut box, press any combo with ⌃ ⌥ ⇧ or ⌘). The floating toolbar in drawing mode (drag it by the grip) has the same style controls.
 
 When screen sharing, share the whole screen so the overlay is included.
 
