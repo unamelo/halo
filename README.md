@@ -18,7 +18,6 @@ Needs only the Swift toolchain (Xcode Command Line Tools), no Xcode project.
 | Tap ⌃⌥D (default) | Toggle drawing mode with toolbar (stopping keeps drawings, click-through) |
 | ⌃⌥X (default) | Clear from anywhere |
 | Drag | Draw with current tool |
-| Click | Drop a ring marker |
 | 1 2 3 4 | Box · Spotlight · Arrow · Pen |
 | ⌫ / Z | Undo |
 | C | Clear |

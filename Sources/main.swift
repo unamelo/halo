@@ -202,16 +202,6 @@ final class Mark {
         }
     }
 
-    func pop() {
-        let s = CASpringAnimation(keyPath: "transform.scale")
-        s.fromValue = 0.5
-        s.toValue = 1
-        s.damping = 11
-        s.initialVelocity = 6
-        s.duration = s.settlingDuration
-        stroke.root.add(s, forKey: "pop")
-    }
-
     func remove() {
         CATransaction.begin()
         CATransaction.setCompletionBlock { [layer] in layer.removeFromSuperlayer() }
@@ -581,13 +571,9 @@ final class Canvas: NSView {
         let p = convert(e.locationInWindow, from: nil)
         let tiny = hypot(p.x - start.x, p.y - start.y) < 8 && (m.tool != .pen || points.count < 4)
         if tiny {
-            // A plain click drops a ring marker where you clicked.
+            // A plain click leaves nothing behind, just the click ripple when that's on.
             m.layer.removeFromSuperlayer()
-            let ring = Mark(tool: .box, style: app.settings.style, bounds: bounds, scale: scale)
-            ring.update(Shapes.ring(start, 30))
-            add(ring)
-            ring.pop()
-            app.scheduleFade(ring, on: self)
+            if app.settings.clicks { ripple(at: start) }
             return
         }
         marks.append(m)
