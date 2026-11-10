@@ -28,6 +28,20 @@ The floating toolbar (drag it by the grip) and the menu-bar menu control colour,
 
 When screen sharing, share the whole screen so the overlay is included.
 
+## Icon
+
+`icon/make-icon.swift` draws the icon. To regenerate:
+
+```sh
+swift icon/make-icon.swift
+mkdir icon/AppIcon.iconset
+for s in 16 32 128 256 512; do
+  sips -z $s $s icon/AppIcon.png --out icon/AppIcon.iconset/icon_${s}x${s}.png
+  sips -z $((s*2)) $((s*2)) icon/AppIcon.png --out icon/AppIcon.iconset/icon_${s}x${s}@2x.png
+done
+iconutil -c icns icon/AppIcon.iconset -o icon/AppIcon.icns && rm -r icon/AppIcon.iconset
+```
+
 ## Preview without screen recording
 
 ```sh

@@ -5,7 +5,8 @@ cd "$(dirname "$0")"
 
 APP=Halo.app
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+cp icon/AppIcon.icns "$APP/Contents/Resources/"
 
 swiftc -O -swift-version 5 Sources/main.swift -o "$APP/Contents/MacOS/Halo"
 
@@ -17,6 +18,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundleName</key><string>Halo</string>
   <key>CFBundleIdentifier</key><string>com.unamelo.halo</string>
   <key>CFBundleExecutable</key><string>Halo</string>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>0.1</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
