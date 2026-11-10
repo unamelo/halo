@@ -394,7 +394,7 @@ final class Toolbar: NSView {
 
         stack.addArrangedSubview(TBButton(symbol: "arrow.uturn.backward", tip: "Undo  (⌫)") { [weak self] in self?.app.undo() })
         stack.addArrangedSubview(TBButton(symbol: "trash", tip: "Clear  (C)") { [weak self] in self?.app.clearAll() })
-        stack.addArrangedSubview(TBButton(symbol: "xmark", tip: "Done  (Esc · ⌃⌥D keeps drawings)") { [weak self] in self?.app.setDrawing(false) })
+        stack.addArrangedSubview(TBButton(symbol: "xmark", tip: "Done  (Esc clears · ⌃⌥D keeps drawings)") { [weak self] in self?.app.setDrawing(false) })
 
         let size = stack.fittingSize
         let origin = frame.origin
@@ -533,7 +533,13 @@ final class Canvas: NSView {
         mark.remove()
     }
 
-    func clear() { marks.forEach { $0.remove() }; marks.removeAll() }
+    func clear() {
+        marks.forEach { $0.remove() }
+        marks.removeAll()
+        current?.layer.removeFromSuperlayer()
+        current = nil
+        toolbar.alphaValue = 1
+    }
     func undo() { if let m = marks.last { removeMark(m) } }
 
     // Drawing
@@ -586,6 +592,12 @@ final class Canvas: NSView {
         case .pen: m.update(Shapes.pen(points))
         }
     }
+
+    // Holding ⌃ turns clicks into right-clicks; draw with them all the same.
+    override func rightMouseDown(with e: NSEvent) { mouseDown(with: e) }
+    override func rightMouseDragged(with e: NSEvent) { mouseDragged(with: e) }
+    override func rightMouseUp(with e: NSEvent) { mouseUp(with: e) }
+    override func menu(for event: NSEvent) -> NSMenu? { nil }
 
     override func keyDown(with e: NSEvent) {
         switch Int(e.keyCode) {
@@ -687,7 +699,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in self?.buildOverlays() }
 
         installHotKeys()
-        registerHotKey(1, key: kVK_ANSI_D) { [weak self] in self.map { $0.setDrawing(!$0.drawing) } }
+        registerHotKey(1, key: kVK_ANSI_D) { [weak self] in self?.hotKeyPressed() }
         registerHotKey(2, key: kVK_ANSI_X) { [weak self] in self?.clearAll() }
         updateClickMonitor()
 
@@ -704,7 +716,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return overlays.first { NSMouseInRect(p, $0.frame, false) } ?? overlays.first
     }
 
-    func setDrawing(_ on: Bool) {
+    // Tap ⌃⌥D: stay in drawing mode with the toolbar. Hold ⌃⌥D: draw while held, clear on release.
+    private var holdTimer: Timer?
+    private var pressedAt = Date()
+
+    private func hotKeyPressed() {
+        if holdTimer != nil { return } // key repeat while holding
+        if drawing { setDrawing(false); return }
+        pressedAt = Date()
+        setDrawing(true, toolbar: false)
+        // Polling the modifier state needs no Input Monitoring permission.
+        holdTimer = Timer.scheduledTimer(withTimeInterval: 0.03, repeats: true) { [weak self] _ in self?.checkHold() }
+    }
+
+    private func checkHold() {
+        let flags = NSEvent.modifierFlags
+        if flags.contains(.control) && flags.contains(.option) { return }
+        holdTimer?.invalidate()
+        holdTimer = nil
+        guard drawing else { return }
+        if Date().timeIntervalSince(pressedAt) < 0.3 {
+            overlayUnderMouse?.canvas.showToolbar()
+        } else {
+            clearAll()
+            setDrawing(false)
+        }
+    }
+
+    func setDrawing(_ on: Bool, toolbar: Bool = true) {
         guard on != drawing else { return }
         drawing = on
         overlays.forEach { $0.ignoresMouseEvents = !on }
@@ -715,10 +754,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if let o = overlayUnderMouse {
                 o.makeKeyAndOrderFront(nil)
                 o.makeFirstResponder(o.canvas)
-                o.canvas.showToolbar()
+                if toolbar { o.canvas.showToolbar() }
             }
             NSCursor.crosshair.set()
         } else {
+            holdTimer?.invalidate()
+            holdTimer = nil
             overlays.forEach { $0.canvas.hideToolbar(); $0.orderFrontRegardless() }
             NSCursor.arrow.set()
             previousApp?.activate()

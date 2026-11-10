@@ -14,7 +14,8 @@ Needs only the Swift toolchain (Xcode Command Line Tools), no Xcode project.
 
 | Key | Action |
 |---|---|
-| ⌃⌥D | Start / stop drawing (stopping keeps drawings, click-through) |
+| Hold ⌃⌥D | Draw while held; release clears everything (no toolbar) |
+| Tap ⌃⌥D | Toggle drawing mode with toolbar (stopping keeps drawings, click-through) |
 | ⌃⌥X | Clear from anywhere |
 | Drag | Draw with current tool |
 | Click | Drop a ring marker |
